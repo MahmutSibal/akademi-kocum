@@ -1,0 +1,3 @@
+# Konteyner içinde çalışan script'ler LF satır sonuyla kalmalı (Windows CRLF bash'i bozar)
+*.sh   text eol=lf
+*.sql  text eol=lf

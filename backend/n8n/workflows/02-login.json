@@ -1,0 +1,237 @@
+{
+  "id": "akAuthLogin00001",
+  "name": "02 - Giriş (POST /webhook/login)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Webhook: login",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "617973c0-ebfa-d9a7-302b-9f852bf9000d",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "login",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "865de891-6882-0e4d-2e26-7753aee0ae0c"
+    },
+    {
+      "name": "Girdiyi doğrula",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "/** Doğrulama hatası: IF düğümü ok=false görünce doğrudan yanıtlar. */\nconst fail = (status, error, extra = {}) => [{ json: { ok: false, status, body: { error, ...extra } } }];\n\n/** SQL'e gidecek veri: UTF-16LE JSON -> base64 (dbo.fn_DecodePayload çözer). */\nconst toPayload = (obj) => Buffer.from(JSON.stringify(obj), 'utf16le').toString('base64');\n\nconst body = $input.first().json.body || {};\nconst email = String(body.email || '').trim().toLowerCase();\nconst password = String(body.password || '');\nif (!email || !password) return fail(400, 'E-posta ve şifre zorunludur.');\nreturn [{ json: { ok: true, password, payload: toPayload({ email }) } }];"
+      },
+      "id": "a17a830e-835f-7d3f-e730-fbfc9a1b7f9d"
+    },
+    {
+      "name": "Geçerli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "178992ac-84bc-b798-5884-f07fb2eac257",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "ac4c4972-9748-3cce-807f-c3f36b455da1"
+    },
+    {
+      "name": "SQL: kullanıcıyı bul",
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        300
+      ],
+      "credentials": {
+        "microsoftSql": {
+          "id": "akMssqlCred00001",
+          "name": "StudyAssistant SQL"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET NOCOUNT ON;\nDECLARE @j NVARCHAR(MAX) = dbo.fn_DecodePayload($1);\nDECLARE @email NVARCHAR(256) = JSON_VALUE(@j, '$.email');\nSELECT u.Id AS id, u.Email AS email, u.Name AS name, u.PasswordHash AS passwordHash\nFROM (SELECT 1 AS x) d\nLEFT JOIN dbo.Users u ON u.Email = @email;",
+        "options": {
+          "queryReplacement": "={{ $json.payload }}"
+        }
+      },
+      "id": "39630c9e-1ce4-1dcc-9c1c-8eb36af788a3"
+    },
+    {
+      "name": "Şifreyi doğrula + token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst JWT_SECRET = $env.JWT_SECRET || '';\n\nconst TOKEN_TTL_SEC = 7 * 24 * 3600;\n\nconst b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');\n\nfunction signToken(claims) {\n  if (!JWT_SECRET) throw new Error('JWT_SECRET tanımlı değil (.env)');\n  const now = Math.floor(Date.now() / 1000);\n  const head = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));\n  const pay = b64url(JSON.stringify({ ...claims, iat: now, exp: now + TOKEN_TTL_SEC }));\n  const sig = b64url(crypto.createHmac('sha256', JWT_SECRET).update(`${head}.${pay}`).digest());\n  return `${head}.${pay}.${sig}`;\n}\n\nconst r = $input.first().json;\nconst password = $('Girdiyi doğrula').first().json.password;\nconst denied = [{ json: { status: 401, body: { error: 'E-posta veya şifre hatalı.' } } }];\nif (!r.id) return denied;\n\nconst [algo, saltHex, hashHex] = String(r.passwordHash || '').split('$');\nif (algo !== 'scrypt' || !saltHex || !hashHex) return denied;\nconst expected = Buffer.from(hashHex, 'hex');\nconst actual = crypto.scryptSync(password, Buffer.from(saltHex, 'hex'), expected.length, { N: 16384, r: 8, p: 1 });\nif (!crypto.timingSafeEqual(expected, actual)) return denied;\n\nconst user = { id: r.id, email: r.email, name: r.name };\nreturn [{ json: { status: 200, body: { token: signToken({ sub: r.id, email: r.email }), user } } }];"
+      },
+      "id": "01b95216-4598-57ac-70a3-7470fb9adf46"
+    },
+    {
+      "name": "Hata: veritabanı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json.error;\nconsole.log('[db-error]', typeof err === 'string' ? err : JSON.stringify(err));\nreturn [{ json: { status: 500, body: { error: 'Veritabanı işlemi başarısız oldu. Lütfen daha sonra tekrar deneyin.' } } }];"
+      },
+      "id": "813c2c2d-d447-15bf-7000-a6333b4e2a3b"
+    },
+    {
+      "name": "Yanıtla",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 200 }}"
+        }
+      },
+      "id": "26d4f890-94ae-85c6-ad3b-7811f982efcf"
+    }
+  ],
+  "connections": {
+    "Webhook: login": {
+      "main": [
+        [
+          {
+            "node": "Girdiyi doğrula",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Girdiyi doğrula": {
+      "main": [
+        [
+          {
+            "node": "Geçerli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geçerli mi?": {
+      "main": [
+        [
+          {
+            "node": "SQL: kullanıcıyı bul",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL: kullanıcıyı bul": {
+      "main": [
+        [
+          {
+            "node": "Şifreyi doğrula + token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hata: veritabanı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Şifreyi doğrula + token": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hata: veritabanı": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "akErrorHandler01",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

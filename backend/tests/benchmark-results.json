@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-05T20:27:14.059Z",
+  "runs": 3,
+  "results": [
+    {
+      "model": "qwen2.5:3b",
+      "loadSeconds": 4.4287482,
+      "quizValidRate": 0.6666666666666666,
+      "quizAvgSeconds": 17.36699176666667,
+      "tokensPerSec": 45.31786236287624,
+      "mojibake": 0,
+      "foreignChars": 0,
+      "summarySeconds": 12.842090599999995,
+      "summaryTurkishRatio": 0.06963645673323093,
+      "summarySample": "Genel Bakış:\nFlutter, Google tarafından geliştirilen açık kaynaklı bir kullanıcı arayüzü (UI) geliştirme çatısıdır. Uygulamaları Dart programlama dili ile yazılarak, tek bir kod tabanından Android, iOS, web ve masaüstü uygulamaları üretir. Dart, hem JIT (Just-In-Time) hem de AOT (Ahead-Of-Time) derlemeyi destekler: geliştirme sırasında JIT sayesinde hot reload kullanılır, yayın sürümünde ise AOT i",
+      "quizErrors": [
+        "S1: cevap seçeneklerde yok",
+        "S3: tekrar eden seçenek"
+      ]
+    },
+    {
+      "model": "qwen2.5:7b",
+      "loadSeconds": 5.516642399999997,
+      "quizValidRate": 0.6666666666666666,
+      "quizAvgSeconds": 28.377948466666666,
+      "tokensPerSec": 22.367909650699204,
+      "mojibake": 0,
+      "foreignChars": 0,
+      "summarySeconds": 18.087460800000002,
+      "summaryTurkishRatio": 0.07746478873239436,
+      "summarySample": "Genel Bakış:\nFlutter, Google tarafından geliştirilmiş ve açık kaynaklı bir kullanıcı arayüzü (UI) geliştirme aracıdır. Bir kod tabanından Android, iOS, web ve masaüstü uygulamaları oluşturmayı sağlar. Flutter, Dart ile yazılmıştır ve hot reload ve hot restart özellikleriyle geliştirme sürecinde yardımcı olur.\n\nAnahtar Kavramlar:\n- Widget: Flutter'da arayüzdeki her şey bir widget'tır. Metin, düğme,",
+      "quizErrors": [
+        "S3: tekrar eden seçenek"
+      ]
+    },
+    {
+      "model": "gemma4:12b",
+      "loadSeconds": 21.48237890000001,
+      "quizValidRate": 1,
+      "quizAvgSeconds": 73.00270826666666,
+      "tokensPerSec": 8.844957755952843,
+      "mojibake": 0,
+      "foreignChars": 0,
+      "summarySeconds": 38.6071177,
+      "summaryTurkishRatio": 0.07426856714178545,
+      "summarySample": "Genel Bakış:\nFlutter, Google tarafından geliştirilen ve tek bir kod tabanıyla farklı platformlar için uygulama geliştirmeyi sağlayan bir kullanıcı arayüzü çatısıdır. Dart programlama dilini kullanan bu sistemde, arayüzdeki her bileşen bir widget olarak tanımlanır ve iç içe geçerek bir widget ağacı oluşturur.\n\nAnahtar Kavramlar:\n- Dart Dili: JIT (geliştirme için hot reload) ve AOT (yayın için yerel",
+      "quizErrors": []
+    }
+  ]
+}

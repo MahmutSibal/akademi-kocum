@@ -1,0 +1,546 @@
+{
+  "id": "akEvaluateQuiz01",
+  "name": "06 - Performans Değerlendirme (POST /webhook/evaluate)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Webhook: evaluate",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "e3677c29-eee2-7915-bc4f-53c2b57392a1",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evaluate",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "003d11db-462a-d696-5e30-daa7da13a011"
+    },
+    {
+      "name": "Girdiyi doğrula",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst JWT_SECRET = $env.JWT_SECRET || '';\n\nconst b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');\n\nconst fromB64url = (s) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');\n\n/** Authorization: Bearer <jwt> başlığını doğrular; geçerliyse claim'leri döndürür. */\nfunction verifyToken(headers) {\n  const m = /^Bearer\\s+(.+)$/i.exec((headers && headers.authorization) || '');\n  if (!m || !JWT_SECRET) return null;\n  const parts = m[1].split('.');\n  if (parts.length !== 3) return null;\n  const expected = b64url(crypto.createHmac('sha256', JWT_SECRET).update(`${parts[0]}.${parts[1]}`).digest());\n  if (expected.length !== parts[2].length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) return null;\n  try {\n    const claims = JSON.parse(fromB64url(parts[1]).toString('utf8'));\n    return claims.exp > Date.now() / 1000 ? claims : null;\n  } catch {\n    return null;\n  }\n}\n\n/** Doğrulama hatası: IF düğümü ok=false görünce doğrudan yanıtlar. */\nconst fail = (status, error, extra = {}) => [{ json: { ok: false, status, body: { error, ...extra } } }];\n\n/** SQL'e gidecek veri: UTF-16LE JSON -> base64 (dbo.fn_DecodePayload çözer). */\nconst toPayload = (obj) => Buffer.from(JSON.stringify(obj), 'utf16le').toString('base64');\n\nconst toId = (v) => {\n  const n = Number(v);\n  return Number.isInteger(n) && n > 0 ? n : null;\n};\n\n/** Token'ı doğrular, gövdede userId varsa token ile eşleştiğini kontrol eder. */\nfunction requireUser(req) {\n  const claims = verifyToken(req.headers);\n  if (!claims) return { error: fail(401, 'Oturum geçersiz veya süresi dolmuş. Lütfen tekrar giriş yapın.') };\n  const bodyUser = req.body && req.body.userId;\n  if (bodyUser !== undefined && bodyUser !== null && Number(bodyUser) !== Number(claims.sub)) {\n    return { error: fail(403, 'Bu işlem için yetkiniz yok.') };\n  }\n  return { userId: Number(claims.sub) };\n}\n\nconst req = $input.first().json;\nconst auth = requireUser(req);\nif (auth.error) return auth.error;\nconst body = req.body || {};\nconst quizId = toId(body.quizId);\nif (!quizId) return fail(400, 'quizId geçersiz.');\nif (!Array.isArray(body.answers) || body.answers.length === 0 || body.answers.length > 50) return fail(400, 'answers bir dizi olmalı (1-50 eleman).');\n\nconst answers = [];\nfor (const a of body.answers) {\n  const questionIndex = Number(a && a.questionIndex);\n  if (!Number.isInteger(questionIndex) || questionIndex < 0) return fail(400, 'Her cevapta geçerli bir questionIndex olmalı.');\n  let selected = a.selected;\n  if (typeof selected === 'number' && selected >= 0 && selected <= 3) selected = 'ABCD'[selected];\n  selected = selected === null || selected === undefined || selected === '' ? null : String(selected).trim().toUpperCase();\n  if (selected !== null && !/^[ABCD]$/.test(selected)) return fail(400, 'selected alanı A, B, C, D veya null olmalı.');\n  answers.push({ questionIndex, selected });\n}\nreturn [{ json: { ok: true, userId: auth.userId, quizId, answers, payload: toPayload({ userId: auth.userId, quizId }) } }];"
+      },
+      "id": "41833c67-17bb-e403-198a-af8ae2a280eb"
+    },
+    {
+      "name": "Geçerli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "178992ac-84bc-b798-5884-f07fb2eac257",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "74e376ba-6bef-5c05-8320-ead9808a78be"
+    },
+    {
+      "name": "SQL: doğru cevapları getir",
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        300
+      ],
+      "credentials": {
+        "microsoftSql": {
+          "id": "akMssqlCred00001",
+          "name": "StudyAssistant SQL"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET NOCOUNT ON;\nDECLARE @j NVARCHAR(MAX) = dbo.fn_DecodePayload($1);\nSELECT q.Id AS quizId, q.NoteId AS noteId, c.Name AS courseName, n.Title AS noteTitle,\n    (SELECT qq.Id AS id, qq.QuestionIndex AS questionIndex, qq.QuestionText AS question,\n            qq.OptionA AS a, qq.OptionB AS b, qq.OptionC AS c, qq.OptionD AS d,\n            qq.CorrectAnswer AS correct, qq.Explanation AS explanation, qq.Topic AS topic\n       FROM dbo.QuizQuestions qq WHERE qq.QuizId = q.Id ORDER BY qq.QuestionIndex FOR JSON PATH) AS questions\nFROM (SELECT 1 AS x) d\nLEFT JOIN dbo.Quizzes q ON q.Id = JSON_VALUE(@j, '$.quizId') AND q.UserId = JSON_VALUE(@j, '$.userId')\nLEFT JOIN dbo.Courses c ON c.Id = q.CourseId\nLEFT JOIN dbo.Notes n ON n.Id = q.NoteId;",
+        "options": {
+          "queryReplacement": "={{ $json.payload }}"
+        }
+      },
+      "id": "8889406c-7ed9-30e0-4bf2-c8f4ba8077cf"
+    },
+    {
+      "name": "Test var mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0932a6e2-6db1-ba0c-5ec2-c79cdc572037",
+              "leftValue": "={{ !!$json.quizId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "f1790b91-90a7-f80a-d319-b1dbfa56d9cc"
+    },
+    {
+      "name": "Test bulunamadı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        560
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { status: 404, body: { error: 'Test bulunamadı.' } } }];"
+      },
+      "id": "3cd1994e-033a-cd4b-2ef7-a20449c07e5c"
+    },
+    {
+      "name": "Puanla (kod)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const OLLAMA = {\n  url: `${($env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\\/$/, '')}/api/chat`,\n  model: $env.OLLAMA_MODEL || 'qwen2.5:7b',\n  numCtx: Number($env.OLLAMA_NUM_CTX || 8192),\n  timeout: Number($env.OLLAMA_TIMEOUT_MS || 180000),\n  // Modele verilecek en uzun not metni (bağlam penceresini aşmamak için)\n  maxInputChars: Number($env.MAX_LLM_INPUT_CHARS || 12000),\n};\n\n/** format: undefined (serbest metin), 'json' veya bir JSON şeması. */\nfunction chatRequest(messages, { temperature = 0.4, format } = {}) {\n  const body = {\n    model: OLLAMA.model,\n    messages,\n    stream: false,\n    keep_alive: $env.OLLAMA_KEEP_ALIVE || '30m',\n    options: { temperature, num_ctx: OLLAMA.numCtx },\n  };\n  if (format) body.format = format;\n  return { url: OLLAMA.url, body, timeout: OLLAMA.timeout };\n}\n\n// Puanlama LLM'e değil koda yaptırılır\nconst v = $('Girdiyi doğrula').first().json;\nconst quiz = $input.first().json;\nconst qs = JSON.parse(quiz.questions || '[]');\nconst selectedBy = new Map(v.answers.map((a) => [a.questionIndex, a.selected]));\n\nconst results = qs.map((q) => {\n  const selected = selectedBy.has(q.questionIndex) ? selectedBy.get(q.questionIndex) : null;\n  return {\n    questionId: q.id, questionIndex: q.questionIndex, question: q.question,\n    options: [q.a, q.b, q.c, q.d], selected, correctAnswer: q.correct,\n    isCorrect: selected === q.correct, explanation: q.explanation, topic: q.topic,\n  };\n});\nconst score = results.filter((r) => r.isCorrect).length;\nconst total = results.length;\nconst wrong = results.filter((r) => !r.isCorrect);\n\n// PROMPT (öneri): yanlış konulara göre kişiselleştirilmiş, somut çalışma önerisi (JSON)\nconst optionText = (r, letter) => (letter ? `${letter}) ${r.options['ABCD'.indexOf(letter)]}` : 'boş bırakıldı');\nconst wrongList = wrong.map((r, i) =>\n  `${i + 1}) Konu: ${r.topic}\\n   Soru: ${r.question}\\n   Öğrencinin cevabı: ${optionText(r, r.selected)}\\n   Doğru cevap: ${optionText(r, r.correctAnswer)}\\n   Açıklama: ${r.explanation}`).join('\\n');\nconst system = 'Sen öğrencilere kişiselleştirilmiş çalışma önerisi veren deneyimli ve destekleyici bir eğitim koçusun. Her zaman Türkçe ve yalnızca Latin alfabesiyle yazarsın. Yalnızca geçerli JSON üretirsin.';\nconst user = [\n  `Öğrenci \"${quiz.courseName}\" dersinin \"${quiz.noteTitle}\" notundan oluşturulan testte ${total} sorudan ${score} tanesini doğru yanıtladı (başarı yüzdesi: ${Math.round((100 * score) / Math.max(total, 1))}).`,\n  '',\n  'Yanlış yaptığı veya boş bıraktığı sorular:',\n  wrongList,\n  '',\n  'Bu sonuçlara göre öğrenciye kişiselleştirilmiş bir çalışma önerisi hazırla.',\n  'Kurallar:',\n  '- \"focusTopics\" yalnızca yanlış yapılan konulardan oluşsun; her biri için neden çalışması gerektiğini ve somut bir çalışma adımı yaz.',\n  '- \"studyPlan\" 3-5 adımlık, uygulanabilir bir plan olsun.',\n  '- Öğrenciye \"sen\" diye hitap et, cesaretlendirici ama net ol.',\n  '',\n  'JSON biçimi:',\n  '{\"summary\":\"1-2 cümlelik değerlendirme\",\"focusTopics\":[{\"topic\":\"...\",\"reason\":\"...\",\"action\":\"...\"}],\"studyPlan\":[\"...\",\"...\"],\"motivation\":\"kısa motive edici cümle\"}',\n].join('\\n');\nconst format = {\n  type: 'object',\n  properties: {\n    summary: { type: 'string' },\n    focusTopics: { type: 'array', items: { type: 'object', properties: { topic: { type: 'string' }, reason: { type: 'string' }, action: { type: 'string' } }, required: ['topic', 'reason', 'action'] } },\n    studyPlan: { type: 'array', items: { type: 'string' } },\n    motivation: { type: 'string' },\n  },\n  required: ['summary', 'focusTopics', 'studyPlan', 'motivation'],\n};\nreturn [{ json: {\n  quizId: v.quizId, noteId: quiz.noteId, noteTitle: quiz.noteTitle, courseName: quiz.courseName,\n  score, total, results, hasWrong: wrong.length > 0,\n  wrongTopics: [...new Set(wrong.map((r) => r.topic))],\n  ollama: chatRequest([{ role: 'system', content: system }, { role: 'user', content: user }], { temperature: 0.5, format }),\n} }];"
+      },
+      "id": "182e6232-e2b7-ee56-ce05-1587b0d470f5"
+    },
+    {
+      "name": "Yanlış var mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "24be1621-a0f4-eab1-cc0b-34be1b5d26ee",
+              "leftValue": "={{ $json.hasWrong }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "d0bd070b-945b-36ed-bdc3-12d2eb0d6581"
+    },
+    {
+      "name": "Ollama: öneri üret",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        220
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.ollama.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ollama.body) }}",
+        "options": {
+          "timeout": "={{ $json.ollama.timeout }}"
+        }
+      },
+      "notes": "Yanlış konular -> öneri",
+      "notesInFlow": true,
+      "id": "d3af2ee0-b976-34e1-6f2b-a8ef96c4cf52"
+    },
+    {
+      "name": "Öneriyi biçimle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        220
+      ],
+      "parameters": {
+        "jsCode": "// Qwen modelleri bazen Türkçe harfleri, UTF-8 baytlarının GBK okunuşu olan\n// Çince karakterlerle yazar (ı -> 谋, ş -> 艧 ...). Bunları geri çeviririz.\nconst MOJIBAKE = { '莽': 'ç', '脟': 'Ç', '臒': 'ğ', '臑': 'Ğ', '谋': 'ı', '陌': 'İ', '枚': 'ö', '脰': 'Ö', '艧': 'ş', '艦': 'Ş', '眉': 'ü', '脺': 'Ü', '芒': 'â', '脗': 'Â', '卯': 'î', '脦': 'Î', '没': 'û', '脹': 'Û' };\n\nconst MOJIBAKE_RE = new RegExp(`[${Object.keys(MOJIBAKE).join('')}]`, 'g');\n\nconst fixTurkish = (s) => String(s || '').replace(MOJIBAKE_RE, (c) => MOJIBAKE[c]);\n\n/** Modelin JSON yanıtını ayrıştırır; ```json bloklarını da tolere eder. */\nfunction parseModelJson(raw) {\n  const text = fixTurkish(raw).trim().replace(/^```(?:json)?\\s*/i, '').replace(/```$/, '');\n  try {\n    return JSON.parse(text);\n  } catch {\n    const s = text.indexOf('{');\n    const e = text.lastIndexOf('}');\n    if (s >= 0 && e > s) {\n      try {\n        return JSON.parse(text.slice(s, e + 1));\n      } catch {\n        /* aşağıda null */\n      }\n    }\n    return null;\n  }\n}\n\nconst s = $('Puanla (kod)').first().json;\nconst res = $input.first().json;\nlet detail = parseModelJson((res.message || {}).content);\nconst ok = detail && typeof detail.summary === 'string' && Array.isArray(detail.focusTopics);\nif (!ok) {\n  // Ollama hata verirse veya JSON bozuksa öneri yine üretilir (kural tabanlı yedek)\n  detail = {\n    summary: `${s.total} sorudan ${s.score} doğru yaptın. Aşağıdaki konuları tekrar etmen faydalı olacak.`,\n    focusTopics: s.wrongTopics.map((t) => ({ topic: t, reason: 'Bu konudaki soruyu yanlış yaptın.', action: 'Ders notundaki ilgili bölümü tekrar oku ve özet çıkar.' })),\n    studyPlan: ['Yanlış yaptığın soruların açıklamalarını oku.', 'İlgili konuları notundan tekrar et.', 'Aynı nottan yeni bir test oluşturup tekrar dene.'],\n    motivation: 'Her yanlış, öğrenmek için bir fırsat!',\n    fallback: true,\n  };\n}\nconst lines = [detail.summary, '', 'Odaklanman gereken konular:'];\nfor (const f of detail.focusTopics) lines.push(`• ${f.topic}: ${f.reason} → ${f.action}`);\nlines.push('', 'Çalışma planı:');\n(detail.studyPlan || []).forEach((p, i) => lines.push(`${i + 1}. ${p}`));\nif (detail.motivation) lines.push('', detail.motivation);\nreturn [{ json: { recommendation: lines.join('\\n'), recommendationDetail: detail } }];"
+      },
+      "id": "d3d1e552-7b1c-98c3-f79c-51eba294bf77"
+    },
+    {
+      "name": "Tam puan önerisi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        420
+      ],
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\nconst detail = {\n  summary: `Tebrikler! ${s.total} sorunun hepsini doğru yanıtladın.`,\n  focusTopics: [],\n  studyPlan: ['Bu notu birkaç gün sonra tekrar ederek kalıcılığı artır.', 'Daha fazla soruyla yeni bir test oluştur.', 'Bir sonraki konuya geç.'],\n  motivation: 'Harika gidiyorsun, aynen devam!',\n};\nconst recommendation = [detail.summary, '', 'Çalışma planı:', ...detail.studyPlan.map((p, i) => `${i + 1}. ${p}`), '', detail.motivation].join('\\n');\nreturn [{ json: { recommendation, recommendationDetail: detail } }];"
+      },
+      "id": "ed835525-db9a-b5cb-52e3-5cfb1fce0b87"
+    },
+    {
+      "name": "Kayıt verisi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        300
+      ],
+      "parameters": {
+        "jsCode": "/** SQL'e gidecek veri: UTF-16LE JSON -> base64 (dbo.fn_DecodePayload çözer). */\nconst toPayload = (obj) => Buffer.from(JSON.stringify(obj), 'utf16le').toString('base64');\n\nconst s = $('Puanla (kod)').first().json;\nconst v = $('Girdiyi doğrula').first().json;\nconst { recommendation, recommendationDetail } = $input.first().json;\nreturn [{ json: {\n  recommendation, recommendationDetail,\n  payload: toPayload({\n    userId: v.userId, quizId: s.quizId, score: s.score, total: s.total, recommendation,\n    answers: s.results.map((r) => ({ questionId: r.questionId, selected: r.selected, isCorrect: r.isCorrect })),\n  }),\n} }];"
+      },
+      "id": "f2b39e71-6b65-eb78-6461-436acd695ebf"
+    },
+    {
+      "name": "SQL: sonucu kaydet",
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        2400,
+        300
+      ],
+      "credentials": {
+        "microsoftSql": {
+          "id": "akMssqlCred00001",
+          "name": "StudyAssistant SQL"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET NOCOUNT ON; SET XACT_ABORT ON;\nDECLARE @j NVARCHAR(MAX) = dbo.fn_DecodePayload($1);\n\nBEGIN TRAN;\nDECLARE @t TABLE (Id INT);\nINSERT dbo.QuizResults (UserId, QuizId, Score, Total, Recommendation) OUTPUT inserted.Id INTO @t\nSELECT userId, quizId, score, total, recommendation\nFROM OPENJSON(@j) WITH (userId INT, quizId INT, score INT, total INT, recommendation NVARCHAR(MAX));\nDECLARE @rid INT = (SELECT Id FROM @t);\n\nINSERT dbo.QuizAnswers (ResultId, QuestionId, SelectedAnswer, IsCorrect)\nSELECT @rid, questionId, selected, isCorrect\nFROM OPENJSON(@j, '$.answers') WITH (questionId INT, selected CHAR(1), isCorrect BIT);\nCOMMIT;\nSELECT @rid AS resultId;",
+        "options": {
+          "queryReplacement": "={{ $json.payload }}"
+        }
+      },
+      "notes": "QuizResults + QuizAnswers tek transaction",
+      "notesInFlow": true,
+      "id": "c0ff761a-cbbe-7c13-3cc2-1e06847e8cd9"
+    },
+    {
+      "name": "Yanıtı biçimle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const s = $('Puanla (kod)').first().json;\nconst k = $('Kayıt verisi').first().json;\nconst results = s.results.map(({ questionId, ...r }) => r);\nreturn [{ json: { status: 200, body: {\n  resultId: $input.first().json.resultId, quizId: s.quizId, noteId: s.noteId, noteTitle: s.noteTitle, courseName: s.courseName,\n  score: s.score, total: s.total,\n  percentage: Math.round((100 * s.score) / Math.max(s.total, 1)), results,\n  recommendation: k.recommendation, recommendationDetail: k.recommendationDetail,\n} } }];"
+      },
+      "id": "7649c5d5-ef74-3e66-8036-3affa37af1b9"
+    },
+    {
+      "name": "Hata: veritabanı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json.error;\nconsole.log('[db-error]', typeof err === 'string' ? err : JSON.stringify(err));\nreturn [{ json: { status: 500, body: { error: 'Veritabanı işlemi başarısız oldu. Lütfen daha sonra tekrar deneyin.' } } }];"
+      },
+      "id": "bb95867d-de50-1a99-52bf-b8d0cc0a543f"
+    },
+    {
+      "name": "Yanıtla",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2880,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 200 }}"
+        }
+      },
+      "id": "65fa81f5-0ad5-5ddb-7b0d-e73d0ddb43f1"
+    }
+  ],
+  "connections": {
+    "Webhook: evaluate": {
+      "main": [
+        [
+          {
+            "node": "Girdiyi doğrula",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Girdiyi doğrula": {
+      "main": [
+        [
+          {
+            "node": "Geçerli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geçerli mi?": {
+      "main": [
+        [
+          {
+            "node": "SQL: doğru cevapları getir",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL: doğru cevapları getir": {
+      "main": [
+        [
+          {
+            "node": "Test var mı?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hata: veritabanı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test var mı?": {
+      "main": [
+        [
+          {
+            "node": "Puanla (kod)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Test bulunamadı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puanla (kod)": {
+      "main": [
+        [
+          {
+            "node": "Yanlış var mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Yanlış var mı?": {
+      "main": [
+        [
+          {
+            "node": "Ollama: öneri üret",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tam puan önerisi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama: öneri üret": {
+      "main": [
+        [
+          {
+            "node": "Öneriyi biçimle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Öneriyi biçimle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Öneriyi biçimle": {
+      "main": [
+        [
+          {
+            "node": "Kayıt verisi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tam puan önerisi": {
+      "main": [
+        [
+          {
+            "node": "Kayıt verisi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kayıt verisi": {
+      "main": [
+        [
+          {
+            "node": "SQL: sonucu kaydet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL: sonucu kaydet": {
+      "main": [
+        [
+          {
+            "node": "Yanıtı biçimle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hata: veritabanı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Yanıtı biçimle": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test bulunamadı": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hata: veritabanı": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "akErrorHandler01",
+    "timezone": "Europe/Istanbul"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

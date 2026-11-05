@@ -1,0 +1,53 @@
+{
+  "id": "akErrorHandler01",
+  "name": "00 - Hata Yakalayıcı (Error Trigger)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {},
+      "id": "9f2a3273-69d6-7008-7363-930295d12c89"
+    },
+    {
+      "name": "Hatayı kaydet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Beklenmeyen (yakalanmamış) hatalar buraya düşer; container loglarında görünür.\nconst e = $input.first().json;\nconst info = {\n  workflow: e.workflow && e.workflow.name,\n  node: e.execution && e.execution.lastNodeExecuted,\n  message: e.execution && e.execution.error && e.execution.error.message,\n  executionId: e.execution && e.execution.id,\n  at: new Date().toISOString(),\n};\nconsole.error('[akademi-kocum] beklenmeyen hata', JSON.stringify(info));\nreturn [{ json: info }];"
+      },
+      "id": "1099eb5c-4f95-d02f-44e8-5ae5c3583050"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Hatayı kaydet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

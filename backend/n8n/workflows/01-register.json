@@ -1,0 +1,239 @@
+{
+  "id": "akAuthRegister01",
+  "name": "01 - Kayıt (POST /webhook/register)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Webhook: register",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "1ac6a7cf-47e9-48cd-9054-8b1eb26f7413",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "register",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "bbf68025-c2b1-fd68-58c4-0ab29e860958"
+    },
+    {
+      "name": "Girdiyi doğrula + hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\n/** Doğrulama hatası: IF düğümü ok=false görünce doğrudan yanıtlar. */\nconst fail = (status, error, extra = {}) => [{ json: { ok: false, status, body: { error, ...extra } } }];\n\n/** SQL'e gidecek veri: UTF-16LE JSON -> base64 (dbo.fn_DecodePayload çözer). */\nconst toPayload = (obj) => Buffer.from(JSON.stringify(obj), 'utf16le').toString('base64');\n\nconst body = $input.first().json.body || {};\nconst email = String(body.email || '').trim().toLowerCase();\nconst password = String(body.password || '');\nconst name = String(body.name || '').trim();\n\nif (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email) || email.length > 256) return fail(400, 'Geçerli bir e-posta adresi girin.');\nif (password.length < 6 || password.length > 128) return fail(400, 'Şifre en az 6 karakter olmalı.');\nif (name.length < 2 || name.length > 100) return fail(400, 'Ad en az 2 karakter olmalı.');\n\n// scrypt: tuzlu ve kasıtlı olarak yavaş KDF (bcrypt eşdeğeri). Düz şifre saklanmaz.\nconst salt = crypto.randomBytes(16);\nconst hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });\nconst passwordHash = `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;\nreturn [{ json: { ok: true, payload: toPayload({ email, name, passwordHash }) } }];"
+      },
+      "id": "555fbc0a-ca04-d0e8-2391-ba341ee4da6f"
+    },
+    {
+      "name": "Geçerli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "178992ac-84bc-b798-5884-f07fb2eac257",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "9c5b0fa3-9a20-2c4e-0772-a0ae89224985"
+    },
+    {
+      "name": "SQL: kullanıcı + varsayılan ders",
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        300
+      ],
+      "credentials": {
+        "microsoftSql": {
+          "id": "akMssqlCred00001",
+          "name": "StudyAssistant SQL"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET NOCOUNT ON; SET XACT_ABORT ON;\nDECLARE @j NVARCHAR(MAX) = dbo.fn_DecodePayload($1);\nDECLARE @email NVARCHAR(256), @name NVARCHAR(100), @hash NVARCHAR(512);\nSELECT @email = email, @name = name, @hash = passwordHash\nFROM OPENJSON(@j) WITH (email NVARCHAR(256), name NVARCHAR(100), passwordHash NVARCHAR(512));\n\nIF EXISTS (SELECT 1 FROM dbo.Users WHERE Email = @email)\nBEGIN\n    SELECT N'exists' AS status, CAST(NULL AS INT) AS id, @email AS email, @name AS name;\n    RETURN;\nEND\n\n-- Kullanıcı ve \"Genel\" dersi tek transaction içinde\nBEGIN TRAN;\nDECLARE @t TABLE (Id INT);\nINSERT dbo.Users (Email, PasswordHash, Name) OUTPUT inserted.Id INTO @t VALUES (@email, @hash, @name);\nDECLARE @id INT = (SELECT Id FROM @t);\nINSERT dbo.Courses (UserId, Name, Description) VALUES (@id, N'Genel', N'Derse bağlı olmayan notlar ve sorular');\nCOMMIT;\nSELECT N'created' AS status, @id AS id, @email AS email, @name AS name;",
+        "options": {
+          "queryReplacement": "={{ $json.payload }}"
+        }
+      },
+      "notes": "Parametreli: tüm veri $1 içinde",
+      "notesInFlow": true,
+      "id": "063e5589-4c82-3b25-6c0b-77fd9204cc54"
+    },
+    {
+      "name": "Token üret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst JWT_SECRET = $env.JWT_SECRET || '';\n\nconst TOKEN_TTL_SEC = 7 * 24 * 3600;\n\nconst b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');\n\nfunction signToken(claims) {\n  if (!JWT_SECRET) throw new Error('JWT_SECRET tanımlı değil (.env)');\n  const now = Math.floor(Date.now() / 1000);\n  const head = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));\n  const pay = b64url(JSON.stringify({ ...claims, iat: now, exp: now + TOKEN_TTL_SEC }));\n  const sig = b64url(crypto.createHmac('sha256', JWT_SECRET).update(`${head}.${pay}`).digest());\n  return `${head}.${pay}.${sig}`;\n}\n\nconst r = $input.first().json;\nif (r.status === 'exists') return [{ json: { status: 409, body: { error: 'Bu e-posta ile kayıtlı bir hesap zaten var.' } } }];\nconst user = { id: r.id, email: r.email, name: r.name };\nreturn [{ json: { status: 201, body: { token: signToken({ sub: r.id, email: r.email }), user } } }];"
+      },
+      "id": "8eb62cec-3c32-cdd6-79f0-15b0d1c6df54"
+    },
+    {
+      "name": "Hata: veritabanı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json.error;\nconsole.log('[db-error]', typeof err === 'string' ? err : JSON.stringify(err));\nreturn [{ json: { status: 500, body: { error: 'Veritabanı işlemi başarısız oldu. Lütfen daha sonra tekrar deneyin.' } } }];"
+      },
+      "id": "768e0d8d-3b2a-a4fd-ca13-bca6cb8bdcb2"
+    },
+    {
+      "name": "Yanıtla",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 200 }}"
+        }
+      },
+      "id": "6eb5ae26-f843-a268-4dca-df13640bae8f"
+    }
+  ],
+  "connections": {
+    "Webhook: register": {
+      "main": [
+        [
+          {
+            "node": "Girdiyi doğrula + hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Girdiyi doğrula + hash": {
+      "main": [
+        [
+          {
+            "node": "Geçerli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geçerli mi?": {
+      "main": [
+        [
+          {
+            "node": "SQL: kullanıcı + varsayılan ders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL: kullanıcı + varsayılan ders": {
+      "main": [
+        [
+          {
+            "node": "Token üret",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hata: veritabanı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token üret": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hata: veritabanı": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "akErrorHandler01",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -1,0 +1,368 @@
+{
+  "id": "akExtractImage01",
+  "name": "11 - Fotoğraftan Not (POST /webhook/extract-image)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Webhook: extract-image",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "0045ecd9-2b6d-8706-3a0e-52dd8657efb6",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "extract-image",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "c4ab3ddf-d0ea-2e56-bb6f-51a4f7e59a4a"
+    },
+    {
+      "name": "Görseli doğrula",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst JWT_SECRET = $env.JWT_SECRET || '';\n\nconst b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');\n\nconst fromB64url = (s) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');\n\n/** Authorization: Bearer <jwt> başlığını doğrular; geçerliyse claim'leri döndürür. */\nfunction verifyToken(headers) {\n  const m = /^Bearer\\s+(.+)$/i.exec((headers && headers.authorization) || '');\n  if (!m || !JWT_SECRET) return null;\n  const parts = m[1].split('.');\n  if (parts.length !== 3) return null;\n  const expected = b64url(crypto.createHmac('sha256', JWT_SECRET).update(`${parts[0]}.${parts[1]}`).digest());\n  if (expected.length !== parts[2].length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) return null;\n  try {\n    const claims = JSON.parse(fromB64url(parts[1]).toString('utf8'));\n    return claims.exp > Date.now() / 1000 ? claims : null;\n  } catch {\n    return null;\n  }\n}\n\n/** Doğrulama hatası: IF düğümü ok=false görünce doğrudan yanıtlar. */\nconst fail = (status, error, extra = {}) => [{ json: { ok: false, status, body: { error, ...extra } } }];\n\n/** Token'ı doğrular, gövdede userId varsa token ile eşleştiğini kontrol eder. */\nfunction requireUser(req) {\n  const claims = verifyToken(req.headers);\n  if (!claims) return { error: fail(401, 'Oturum geçersiz veya süresi dolmuş. Lütfen tekrar giriş yapın.') };\n  const bodyUser = req.body && req.body.userId;\n  if (bodyUser !== undefined && bodyUser !== null && Number(bodyUser) !== Number(claims.sub)) {\n    return { error: fail(403, 'Bu işlem için yetkiniz yok.') };\n  }\n  return { userId: Number(claims.sub) };\n}\n\nconst item = $input.first();\nconst auth = requireUser(item.json);\nif (auth.error) return auth.error;\nconst files = item.binary || {};\nconst file = files.file || Object.values(files)[0];\nif (!file) return fail(400, 'multipart/form-data ile \"file\" alanında bir fotoğraf gönderin.');\nconst isImage = /^image\\/(jpeg|png|webp|heic|heif)$/i.test(file.mimeType || '') || /\\.(jpe?g|png|webp|heic)$/i.test(file.fileName || '');\nif (!isImage) return fail(415, 'Yalnızca JPG, PNG veya WEBP fotoğraf yüklenebilir.');\nreturn [{ json: { ok: true, fileName: file.fileName }, binary: { data: file } }];"
+      },
+      "id": "232424ca-5c08-8b0c-22f5-7990cebc395a"
+    },
+    {
+      "name": "Geçerli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "178992ac-84bc-b798-5884-f07fb2eac257",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "cb309dd2-94c3-7572-6c13-8c4f03416d37"
+    },
+    {
+      "name": "Görseli base64 yap",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        720,
+        220
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "data",
+        "destinationKey": "imageBase64",
+        "options": {}
+      },
+      "id": "7bf89e86-0edf-9ae2-e009-5c346a378173"
+    },
+    {
+      "name": "Prompt hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        220
+      ],
+      "parameters": {
+        "jsCode": "/** Doğrulama hatası: IF düğümü ok=false görünce doğrudan yanıtlar. */\nconst fail = (status, error, extra = {}) => [{ json: { ok: false, status, body: { error, ...extra } } }];\n\nconst OLLAMA = {\n  url: `${($env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\\/$/, '')}/api/chat`,\n  model: $env.OLLAMA_MODEL || 'qwen2.5:7b',\n  numCtx: Number($env.OLLAMA_NUM_CTX || 8192),\n  timeout: Number($env.OLLAMA_TIMEOUT_MS || 180000),\n  // Modele verilecek en uzun not metni (bağlam penceresini aşmamak için)\n  maxInputChars: Number($env.MAX_LLM_INPUT_CHARS || 12000),\n};\n\nconst image = $input.first().json.imageBase64;\nif (!image) return fail(422, 'Fotoğraf okunamadı.');\nif (image.length > 14 * 1024 * 1024) return fail(413, 'Fotoğraf çok büyük (en fazla ~10 MB).');\n// PROMPT (görsel -> metin): yorum katmadan, Türkçe karakterleri koruyarak birebir aktar\nconst system = 'Sen ders notlarını dijitalleştiren bir OCR asistanısın. Fotoğraftaki el yazısı veya basılı ders notunu Türkçe karakterleri (ç, ğ, ı, İ, ö, ş, ü) koruyarak birebir metne dökersin. Yorum, açıklama veya özet eklemezsin; okuyamadığın kelimeyi [?] ile belirtirsin.';\nconst user = 'Bu fotoğraftaki tüm ders notunu satır satır, madde işaretleri ve başlıklarla birlikte aynen yaz.';\nconst body = {\n  model: $env.OLLAMA_VISION_MODEL || 'gemma4:12b',\n  stream: false,\n  think: false, // görsel modelin düşünme modu kapalı: yalnızca metni üretsin\n  keep_alive: $env.OLLAMA_KEEP_ALIVE || '30m',\n  options: { temperature: 0.1, num_ctx: 8192, num_predict: 3000 },\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user, images: [image] }],\n};\nreturn [{ json: { ok: true, ollama: { url: OLLAMA.url, body, timeout: Number($env.OLLAMA_VISION_TIMEOUT_MS || 600000) } } }];"
+      },
+      "id": "b3a5d189-68ca-5354-96e6-9dd29791ba62"
+    },
+    {
+      "name": "Görsel hazır mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c93b5172-b591-6cd1-38e3-b0a0ff64eb68",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "6625a2b4-e5ec-1f41-47d3-5e290a555986"
+    },
+    {
+      "name": "Ollama: görseli oku",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        140
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.ollama.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ollama.body) }}",
+        "options": {
+          "timeout": "={{ $json.ollama.timeout }}"
+        }
+      },
+      "notes": "Görsel model (vision)",
+      "notesInFlow": true,
+      "id": "70a67464-f0cb-9572-136f-2ea0c566faea"
+    },
+    {
+      "name": "Metni temizle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        140
+      ],
+      "parameters": {
+        "jsCode": "/** Metni temizler: kontrol karakterleri, fazla boşluk ve satırlar. */\nconst cleanText = (s) =>\n  String(s || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/g, '')\n    .replace(/[ \\t ]+/g, ' ')\n    .replace(/ *\\n */g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n// Qwen modelleri bazen Türkçe harfleri, UTF-8 baytlarının GBK okunuşu olan\n// Çince karakterlerle yazar (ı -> 谋, ş -> 艧 ...). Bunları geri çeviririz.\nconst MOJIBAKE = { '莽': 'ç', '脟': 'Ç', '臒': 'ğ', '臑': 'Ğ', '谋': 'ı', '陌': 'İ', '枚': 'ö', '脰': 'Ö', '艧': 'ş', '艦': 'Ş', '眉': 'ü', '脺': 'Ü', '芒': 'â', '脗': 'Â', '卯': 'î', '脦': 'Î', '没': 'û', '脹': 'Û' };\n\nconst MOJIBAKE_RE = new RegExp(`[${Object.keys(MOJIBAKE).join('')}]`, 'g');\n\nconst fixTurkish = (s) => String(s || '').replace(MOJIBAKE_RE, (c) => MOJIBAKE[c]);\n\n/** Ollama /api/chat yanıtındaki metin (Türkçe karakter düzeltmesiyle). */\nconst modelText = (res) => fixTurkish(((res && res.message) || {}).content).trim();\n\nconst text = cleanText(modelText($input.first().json)).replace(/^```[a-z]*\\n?|```$/g, '').trim();\nif (text.length < 20) return [{ json: { status: 422, body: { error: 'Fotoğrafta okunabilir metin bulunamadı. Daha net ve aydınlık bir fotoğraf deneyin.' } } }];\nreturn [{ json: { status: 200, body: {\n  fileName: $('Görseli doğrula').first().json.fileName, characters: text.length,\n  model: $env.OLLAMA_VISION_MODEL || 'gemma4:12b', text,\n} } }];"
+      },
+      "id": "8a1cc4a7-7026-32b4-ebb8-3ff6d6c39637"
+    },
+    {
+      "name": "Fotoğraf okunamadı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        460
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { status: 422, body: { error: 'Fotoğraf dosyası okunamadı.' } } }];"
+      },
+      "id": "6a1d2e49-4315-2f8c-e544-a058843a5c5f"
+    },
+    {
+      "name": "Hata: Ollama",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        360
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json.error;\nconsole.log('[llm-error]', typeof err === 'string' ? err : JSON.stringify(err));\nreturn [{ json: { status: 502, body: { error: 'Yapay zekâ servisine ulaşılamadı veya yanıt zaman aşımına uğradı. Ollama çalışıyor mu?' } } }];"
+      },
+      "id": "9f79a475-275c-8fda-5eda-14800ca67bcb"
+    },
+    {
+      "name": "Yanıtla",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 200 }}"
+        }
+      },
+      "id": "285805dd-8d67-362e-0ca9-1e12e064954f"
+    }
+  ],
+  "connections": {
+    "Webhook: extract-image": {
+      "main": [
+        [
+          {
+            "node": "Görseli doğrula",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Görseli doğrula": {
+      "main": [
+        [
+          {
+            "node": "Geçerli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geçerli mi?": {
+      "main": [
+        [
+          {
+            "node": "Görseli base64 yap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Görseli base64 yap": {
+      "main": [
+        [
+          {
+            "node": "Prompt hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fotoğraf okunamadı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt hazırla": {
+      "main": [
+        [
+          {
+            "node": "Görsel hazır mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Görsel hazır mı?": {
+      "main": [
+        [
+          {
+            "node": "Ollama: görseli oku",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama: görseli oku": {
+      "main": [
+        [
+          {
+            "node": "Metni temizle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hata: Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Metni temizle": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fotoğraf okunamadı": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hata: Ollama": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "akErrorHandler01",
+    "timezone": "Europe/Istanbul"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

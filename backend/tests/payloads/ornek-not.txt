@@ -1,0 +1,15 @@
+Flutter Temelleri - Hafta 2
+
+Flutter, Google tarafından geliştirilen açık kaynaklı bir kullanıcı arayüzü (UI) geliştirme çatısıdır. Tek bir kod tabanından Android, iOS, web ve masaüstü uygulamaları üretmeyi sağlar. Flutter uygulamaları Dart programlama dili ile yazılır. Dart, hem JIT (Just-In-Time) hem de AOT (Ahead-Of-Time) derlemeyi destekler: geliştirme sırasında JIT sayesinde hot reload kullanılır, yayın sürümünde ise AOT ile yerel makine koduna derlenir.
+
+Widget kavramı: Flutter'da arayüzdeki her şey bir widget'tır. Metin (Text), düğme (ElevatedButton), satır (Row), sütun (Column) ve hatta boşluk (Padding) birer widget'tır. Widget'lar iç içe yerleştirilerek bir widget ağacı oluşturulur.
+
+StatelessWidget ve StatefulWidget: StatelessWidget değişmeyen, kendi durumu (state) olmayan widget'tır; yalnızca kendisine verilen parametrelere göre çizilir. StatefulWidget ise zamanla değişebilen bir duruma sahiptir. Durum, State sınıfında tutulur ve setState() metodu çağrıldığında Flutter build() metodunu yeniden çalıştırarak arayüzü günceller.
+
+Hot reload ve hot restart: Hot reload, kod değişikliklerini uygulamanın durumunu kaybetmeden saniyeler içinde ekrana yansıtır. Hot restart ise uygulamayı baştan başlatır ve durumu sıfırlar.
+
+pubspec.yaml: Projenin adı, sürümü, bağımlılıkları (paketler) ve varlıkları (resimler, fontlar) pubspec.yaml dosyasında tanımlanır. Yeni bir paket eklendikten sonra "flutter pub get" komutu ile paketler indirilir.
+
+Düzen (layout) widget'ları: Row widget'ı çocuklarını yatay, Column widget'ı ise dikey olarak sıralar. Expanded, bir Row veya Column içinde kalan boş alanı doldurmak için kullanılır. Container ise boyut, renk, kenar boşluğu ve dekorasyon vermek için kullanılan çok amaçlı bir widget'tır.
+
+Durum yönetimi: Küçük uygulamalarda setState yeterlidir. Uygulama büyüdükçe Provider, Riverpod veya BLoC gibi durum yönetimi çözümleri tercih edilir. Provider, ChangeNotifier ile birlikte kullanıldığında notifyListeners() çağrısı dinleyen widget'ların yeniden çizilmesini sağlar.
